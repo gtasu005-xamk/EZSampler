@@ -7,12 +7,14 @@
              mc:Ignorable="d">
 
     <StackPanel>
-        <TextBlock Text="RECORDINGS" FontSize="30" FontWeight="Bold" Foreground="#2E2E2E" Margin="0,0,0,8" FontFamily="./Fonts/#Poppins" />
+        <TextBlock Text="RECORDINGS" FontSize="30" Style="{StaticResource TextBlockHeading1}"/>
+
         <TextBlock x:Name="RecordingsFolderText" 
                    Margin="0,0,0,12" 
-                   FontSize="11"
+                   FontSize="12"
                    Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
-                   TextWrapping="Wrap" />
+                   TextWrapping="Wrap"/>
+
         <ListView x:Name="RecordingsList" 
                   Height="320" 
                   SelectionMode="Extended"
@@ -21,11 +23,12 @@
                   MouseMove="RecordingsList_MouseMove">
             <ListView.View>
                 <GridView>
-                    <GridViewColumn Header="Name" DisplayMemberBinding="{Binding Name}" Width="190" />
-                    <GridViewColumn Header="Duration" DisplayMemberBinding="{Binding DurationText}" Width="70" />
+                    <GridViewColumn Header="Name" DisplayMemberBinding="{Binding Name}" Width="180" />
+                    <GridViewColumn Header="Duration" DisplayMemberBinding="{Binding DurationText}" Width="100" />
                 </GridView>
             </ListView.View>
         </ListView>
+
         <StackPanel Orientation="Horizontal" Margin="0,12,0,0" HorizontalAlignment="Center">
             <Button x:Name="RefreshRecordingsButton" 
                     Width="90" 

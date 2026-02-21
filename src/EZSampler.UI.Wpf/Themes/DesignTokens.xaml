@@ -215,7 +215,7 @@
     <Style x:Key="TextBlockHeading1" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource FontFamilyHeading}"/>
         <Setter Property="FontSize" Value="{StaticResource FontSizeDisplay}"/>
-        <Setter Property="FontWeight" Value="{StaticResource FontWeightNormal}"/>
+        <Setter Property="FontWeight" Value="{StaticResource FontWeightBold}"/>
         <Setter Property="Foreground" Value="{StaticResource DarkTextBrush}"/>
     </Style>
     
