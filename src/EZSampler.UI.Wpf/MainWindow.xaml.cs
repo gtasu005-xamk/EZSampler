@@ -1,124 +1,154 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Diagnostics;
-using System.IO;
-using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Threading;
 using EZSampler.Core.Capture;
-using EZSampler.UI.Wpf.Controls;
-using Microsoft.VisualBasic;
+using EZSampler.UI.Wpf.Configuration;
+using EZSampler.UI.Wpf.Models;
+using EZSampler.UI.Wpf.Services;
 using NAudio.Wave;
 
 namespace EZSampler.UI.Wpf;
 
 /// <summary>
 /// Interaction logic for MainWindow.xaml
+/// 
+/// REFACTORED: This window now acts as a coordinator that delegates
+/// to specialized services for playback, recording, waveform rendering, etc.
+/// This keeps the code-behind focused on UI-related wiring only.
 /// </summary>
 public partial class MainWindow : Window
 {
-    private readonly CaptureService _captureService = new();
-    // Lukitus, kun luetaan/piirretään waveform-dataa taustasäikeiltä.
-    private readonly object _waveformGate = new();
-    // Waveformin huippuarvot piirtoa varten.
-    private WaveformAggregator? _waveform;
-    private DateTime _lastWaveformUiUpdate = DateTime.MinValue;
-    private const int MaxPeaks = 900;
-    private CaptureStatus _lastStatus = new(CaptureState.Stopped);
-    private string? _recordingFileName;
-    private readonly ObservableCollection<RecordingItem> _recordings = new();
-    private readonly string _recordingsFolder = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-        "EZSampler Recordings");
+    // ============================================================
+    // CAPTURE & AUDIO CAPTURE
+    // ============================================================
     
-    // Audio bufferit tallennusta varten
-    private readonly List<byte[]> _audioBuffers = new();
+    private readonly CaptureService _captureService = new();
+    private CaptureStatus _lastStatus = new(CaptureState.Stopped);
+    
+    // Audio buffer for current capture session
+    private readonly System.Collections.Generic.List<byte[]> _audioBuffers = new();
     private readonly object _bufferGate = new();
     private WaveFormat? _captureFormat;
+
+    // ============================================================
+    // SERVICES
+    // ============================================================
     
-    // Playback
-    private WaveOutEvent? _waveOut;
-    private MemoryStream? _playbackMemoryStream;
-    private RawSourceWaveStream? _playbackRawStream;
-    private readonly DispatcherTimer _playbackTimer;
-    private TimeSpan _totalDuration;
-    private readonly Stopwatch _playbackStopwatch = new();
-    private TimeSpan _playbackSeekOffset = TimeSpan.Zero;
+    private IPlaybackService? _playbackService;
+    private IRecordingService? _recordingService;
+    private IWaveformRenderingService? _waveformService;
+    private IDialogService? _dialogService;
+    private readonly IStatusService _statusService = new StatusService();
+
+    // ============================================================
+    // OBSERVABLE COLLECTIONS FOR UI BINDING
+    // ============================================================
+    
+    private readonly ObservableCollection<RecordingItemViewModel> _recordingItems = new();
+
 
     public MainWindow()
     {
         InitializeComponent();
+        InitializeServices();
+        HookupEventHandlers();
+    }
 
-        // Luo playback timer
-        _playbackTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(16)  // ~60 FPS
-        };
-        _playbackTimer.Tick += PlaybackTimer_Tick;
+    private void InitializeServices()
+    {
+        _playbackService = new PlaybackService();
+        _recordingService = new RecordingService();
+        _waveformService = new WaveformRenderingService();
+        _dialogService = new DialogService(this);
+    }
 
-        // Kytke palvelun tapahtumat ja ikkunan elinkaari.
+    private void HookupEventHandlers()
+    {
+        // Capture service
         _captureService.StatusChanged += CaptureService_StatusChanged;
         _captureService.Faulted += CaptureService_Faulted;
         _captureService.AudioChunk += CaptureService_AudioChunk;
-        WaveformView.Canvas.SizeChanged += WaveformCanvas_SizeChanged;
-        Closed += OnClosed;
 
-        RecordingsPanel.Recordings = _recordings;
+        // UI events
+        WaveformView.Canvas.SizeChanged += (s, e) => RedrawWaveform();
+        Closed += OnClosed;
         Loaded += OnLoaded;
 
-        // Kytke komponenttien tapahtumat
+        // Control events - Transport
         TransportControls.StartClicked += TransportControls_StartClicked;
         TransportControls.StopClicked += TransportControls_StopClicked;
         TransportControls.PlayClicked += TransportControls_PlayClicked;
 
+        // Control events - Waveform
         WaveformView.ClearClicked += WaveformView_ClearClicked;
         WaveformView.SaveClicked += WaveformView_SaveClicked;
         WaveformView.PositionClicked += WaveformView_PositionClicked;
 
+        // Control events - Recordings
         RecordingsPanel.RefreshClicked += RecordingsPanel_RefreshClicked;
         RecordingsPanel.DeleteClicked += RecordingsPanel_DeleteClicked;
         RecordingsPanel.RenameClicked += RecordingsPanel_RenameClicked;
         RecordingsPanel.RecordingKeyDown += RecordingsPanel_RecordingKeyDown;
+
+        // Playback service
+        if (_playbackService != null)
+        {
+            _playbackService.StateChanged += (s, state) => UpdatePlaybackUI(state);
+        }
+
+        // Status service
+        _statusService.StatusChanged += (s, msg) => CaptureStatusPanel.SetDetails(msg);
     }
+
+    // ============================================================
+    // WINDOW LIFECYCLE
+    // ============================================================
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        EnsureRecordingsFolder();
-        RecordingsPanel.FolderPath = _recordingsFolder;
-        LoadRecordings();
+        if (_recordingService != null)
+        {
+            _recordingService.EnsureRecordingsFolder();
+            RecordingsPanel.FolderPath = _recordingService.RecordingsFolder;
+            LoadRecordings();
+        }
     }
+
+    private async void OnClosed(object? sender, EventArgs e)
+    {
+        _playbackService?.Dispose();
+        await _captureService.StopAsync().ConfigureAwait(true);
+        await _captureService.DisposeAsync().ConfigureAwait(true);
+    }
+
+    // ============================================================
+    // CAPTURE CONTROL
+    // ============================================================
 
     private async void TransportControls_StartClicked(object? sender, EventArgs e)
     {
-        // Käynnistä kaappaus ilman automaattista tallennusta.
         TransportControls.StartButtonEnabled = false;
         TransportControls.StopButtonEnabled = true;
-        CaptureStatusPanel.SetDetails("");
+        _statusService.Clear();
         WaveformView.Clear();
-        lock (_waveformGate)
-        {
-            _waveform = null;
-        }
-        
-        // Tyhjennä audio bufferit
+
+        // Reset audio buffer
         lock (_bufferGate)
         {
             _audioBuffers.Clear();
             _captureFormat = null;
         }
 
+        // Reset waveform
+        _waveformService?.Clear();
+
         await _captureService.StartAsync(new CaptureOptions(EnableFileRecording: false)).ConfigureAwait(true);
     }
 
     private async void TransportControls_StopClicked(object? sender, EventArgs e)
     {
-        // Pysäytä kaappaus.
         TransportControls.StopButtonEnabled = false;
-
         await _captureService.StopAsync().ConfigureAwait(true);
     }
 
@@ -129,35 +159,23 @@ public partial class MainWindow : Window
             _lastStatus = status;
             CaptureStatusPanel.SetStatus(status.State.ToString());
 
-            UpdateDetailsText(status);
-
-            // Luodaan aggregator, kun formaatti selviää.
-            if (status.State == CaptureState.Capturing && _waveform == null && status.SampleRate > 0 && status.Channels > 0)
+            // Initialize waveform service when format is known
+            if (status.State == CaptureState.Capturing && 
+                _waveformService?.PeakCount == 0 && 
+                status.SampleRate > 0 && status.Channels > 0)
             {
-                lock (_waveformGate)
-                {
-                    _waveform = new WaveformAggregator(
-                        WaveFormat.CreateIeeeFloatWaveFormat(status.SampleRate, status.Channels));
-                }
+                _waveformService?.InitializeAggregator(
+                    WaveFormat.CreateIeeeFloatWaveFormat(status.SampleRate, status.Channels));
             }
 
+            // Update button states
             TransportControls.StartButtonEnabled = status.State is CaptureState.Stopped or CaptureState.Faulted;
             TransportControls.StopButtonEnabled = status.State is CaptureState.Capturing or CaptureState.Starting;
-            
-            // Save-, Clear- ja Play-napit käytössä kun pysäytetty JA on audiodataa
-            bool hasAudioData;
-            lock (_bufferGate)
-            {
-                hasAudioData = _audioBuffers.Count > 0 && _captureFormat != null;
-            }
-            bool isPlaying = _waveOut?.PlaybackState == PlaybackState.Playing;
-            WaveformView.SaveButtonEnabled = status.State == CaptureState.Stopped && hasAudioData && !isPlaying;
-            WaveformView.ClearButtonEnabled = status.State == CaptureState.Stopped && hasAudioData && !isPlaying;
-            TransportControls.PlayButtonEnabled = status.State == CaptureState.Stopped && hasAudioData;
+
+            UpdateSaveAndPlayButtons();
 
             if (status.State == CaptureState.Stopped)
             {
-                _recordingFileName = null;
                 LoadRecordings();
             }
         });
@@ -167,538 +185,390 @@ public partial class MainWindow : Window
     {
         Dispatcher.Invoke(() =>
         {
-            // Näytä virhe UI:ssa.
             CaptureStatusPanel.SetStatus(CaptureState.Faulted.ToString());
-            CaptureStatusPanel.SetDetails(ex.Message);
+            _statusService.SetStatus(ex.Message);
             TransportControls.StartButtonEnabled = true;
             TransportControls.StopButtonEnabled = false;
             WaveformView.SaveButtonEnabled = false;
             WaveformView.ClearButtonEnabled = false;
             TransportControls.PlayButtonEnabled = false;
-            _recordingFileName = null;
         });
-    }
-
-    private async void WaveformView_SaveClicked(object? sender, EventArgs e)
-    {
-        // Tallenna kaapattu audio tiedostoon.
-        List<byte[]> buffers;
-        WaveFormat? format;
-        
-        lock (_bufferGate)
-        {
-            if (_audioBuffers.Count == 0 || _captureFormat == null)
-            {
-                return;
-            }
-            
-            buffers = new List<byte[]>(_audioBuffers);
-            format = _captureFormat;
-        }
-
-        var outputPath = BuildRecordingPath();
-        
-        try
-        {
-            WaveformView.SaveButtonEnabled = false;
-            WaveformView.ClearButtonEnabled = false;
-            CaptureStatusPanel.SetDetails("Tallennetaan...");
-            
-            await Task.Run(() =>
-            {
-                using var writer = new WaveFileWriter(outputPath, format);
-                foreach (var buffer in buffers)
-                {
-                    writer.Write(buffer, 0, buffer.Length);
-                }
-            }).ConfigureAwait(true);
-            
-            // Tyhjennä bufferit tallennuksen jälkeen
-            lock (_bufferGate)
-            {
-                _audioBuffers.Clear();
-                _captureFormat = null;
-            }
-            
-            CaptureStatusPanel.SetDetails($"Tallennettu: {Path.GetFileName(outputPath)}");
-            LoadRecordings();
-        }
-        catch (Exception ex)
-        {
-            CaptureStatusPanel.SetDetails($"Virhe tallennuksessa: {ex.Message}");
-            MessageBox.Show(ex.Message, "Tallennus epäonnistui", MessageBoxButton.OK, MessageBoxImage.Error);
-            
-            // Palauta napit käyttöön virheen sattuessa
-            lock (_bufferGate)
-            {
-                bool hasData = _audioBuffers.Count > 0 && _captureFormat != null;
-                WaveformView.SaveButtonEnabled = hasData;
-                WaveformView.ClearButtonEnabled = hasData;
-            }
-        }
-    }
-    
-    private void WaveformView_ClearClicked(object? sender, EventArgs e)
-    {
-        // Pysäytä playback jos käynnissä
-        if (_waveOut != null)
-        {
-            _playbackStopwatch.Stop();
-            _playbackStopwatch.Reset();
-            _playbackSeekOffset = TimeSpan.Zero;
-            _playbackTimer.Stop();
-            _waveOut.Stop();
-            _waveOut.Dispose();
-            _waveOut = null;
-            _playbackMemoryStream?.Dispose();
-            _playbackMemoryStream = null;
-            _playbackRawStream?.Dispose();
-            _playbackRawStream = null;
-            TransportControls.SetPlayButtonText("▶ Play");
-        }
-        
-        // Tyhjennä audiobufferit ilman tallennusta.
-        lock (_bufferGate)
-        {
-            _audioBuffers.Clear();
-            _captureFormat = null;
-        }
-        
-        // Tyhjennä myös waveform
-        lock (_waveformGate)
-        {_waveform = null;}
-        WaveformView.Clear();
-        
-        WaveformView.SaveButtonEnabled = false;
-        WaveformView.ClearButtonEnabled = false;
-        TransportControls.PlayButtonEnabled = false;
-        CaptureStatusPanel.SetDetails("Recording cleared");
-    }
-
-    private void UpdateDetailsText(CaptureStatus status)
-    {
-        if (!string.IsNullOrWhiteSpace(status.LastError))
-        {
-            CaptureStatusPanel.SetDetails(status.LastError);
-            return;
-        }
-
-        if (status.State == CaptureState.Capturing)
-        {
-            var details = $"SampleRate: {status.SampleRate}, Channels: {status.Channels}";
-            if (_captureService.IsRecording && !string.IsNullOrWhiteSpace(_recordingFileName))
-            {
-                details = $"{details}, Recording: {_recordingFileName}";
-            }
-
-            CaptureStatusPanel.SetDetails(details);
-            return;
-        }
-
-        CaptureStatusPanel.SetDetails("");
     }
 
     private void CaptureService_AudioChunk(object? sender, ReadOnlyMemory<byte> buffer)
     {
         var bytes = buffer.ToArray();
-        
-        // Tallenna bufferit muistiin myöhempää tallennusta varten
+
+        // Store buffer for later save
         lock (_bufferGate)
         {
             if (_captureFormat == null && _lastStatus.SampleRate > 0 && _lastStatus.Channels > 0)
             {
                 _captureFormat = WaveFormat.CreateIeeeFloatWaveFormat(_lastStatus.SampleRate, _lastStatus.Channels);
             }
-            
             _audioBuffers.Add(bytes);
         }
-        
-        // Päivitä waveform-data ja rajoita piirtotahti.
-        WaveformAggregator? aggregator;
-        lock (_waveformGate)
-        {
-            aggregator = _waveform;
-        }
 
-        if (aggregator == null)
-        {
-            return;
-        }
-
-        aggregator.Process(bytes, 0, bytes.Length);
-
-        if ((DateTime.UtcNow - _lastWaveformUiUpdate).TotalMilliseconds < 60)
-        {
-            return;
-        }
-
-        _lastWaveformUiUpdate = DateTime.UtcNow;
+        // Update waveform visualization
+        _waveformService?.ProcessAudioChunk(buffer);
         Dispatcher.Invoke(RedrawWaveform);
     }
 
-    private void WaveformCanvas_SizeChanged(object sender, SizeChangedEventArgs e)
-    {
-        RedrawWaveform();
-    }
+    // ============================================================
+    // PLAYBACK CONTROL
+    // ============================================================
 
     private async void TransportControls_PlayClicked(object? sender, EventArgs e)
     {
-        // Jos jo soitetaan, tauko
-        if (_waveOut?.PlaybackState == PlaybackState.Playing)
+        if (_playbackService == null)
         {
-            _waveOut.Pause();
-            // Tallenna nykyinen aika offsettiin
-            _playbackSeekOffset += _playbackStopwatch.Elapsed;
-            _playbackStopwatch.Stop();
-            _playbackTimer.Stop();
-            TransportControls.SetPlayButtonText("▶ Play");
-            CaptureStatusPanel.SetDetails("Playback paused");
             return;
         }
-        
-        // Jos tauolla, jatka
-        if (_waveOut?.PlaybackState == PlaybackState.Paused)
+
+        // Toggle play/pause
+        if (_playbackService.State == PlaybackState.Playing)
         {
-            _waveOut.Play();
-            _playbackStopwatch.Restart();
-            _playbackTimer.Start();
-            TransportControls.SetPlayButtonText("⏸ Pause");
-            CaptureStatusPanel.SetDetails("Playing...");
+            _playbackService.Pause();
+            TransportControls.SetPlayButtonText(AppConstants.PlayButtonPlay);
+            _statusService.SetStatus(AppConstants.Messages.PlaybackPaused);
             return;
         }
-        
-        // Muuten aloita alusta
-        List<byte[]> buffers;
+
+        if (_playbackService.State == PlaybackState.Paused)
+        {
+            _playbackService.Play();
+            TransportControls.SetPlayButtonText(AppConstants.PlayButtonPause);
+            _statusService.SetStatus(AppConstants.Messages.Playing);
+            return;
+        }
+
+        // Start new playback
+        try
+        {
+            byte[] buffer;
+            WaveFormat? format;
+
+            lock (_bufferGate)
+            {
+                if (_audioBuffers.Count == 0 || _captureFormat == null)
+                {
+                    return;
+                }
+
+                var totalLength = _audioBuffers.Sum(b => b.Length);
+                buffer = new byte[totalLength];
+                var offset = 0;
+                foreach (var buf in _audioBuffers)
+                {
+                    Buffer.BlockCopy(buf, 0, buffer, offset, buf.Length);
+                    offset += buf.Length;
+                }
+
+                format = _captureFormat;
+            }
+
+            await _playbackService.InitializeAsync(buffer, format);
+            _playbackService.Play();
+            TransportControls.PlayButtonEnabled = true;
+            TransportControls.SetPlayButtonText(AppConstants.PlayButtonPause);
+            WaveformView.SaveButtonEnabled = false;
+            WaveformView.ClearButtonEnabled = false;
+            _statusService.SetStatus(AppConstants.Messages.Playing);
+        }
+        catch (Exception ex)
+        {
+            _statusService.SetStatus($"{AppConstants.Messages.ErrorPlayback} {ex.Message}");
+        }
+    }
+
+    private void UpdatePlaybackUI(PlaybackState state)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            if (_playbackService == null)
+            {
+                return;
+            }
+
+            // Update playback position on waveform
+            var normalizedPosition = _playbackService.TotalDuration.TotalSeconds > 0
+                ? _playbackService.CurrentPosition.TotalSeconds / _playbackService.TotalDuration.TotalSeconds
+                : 0;
+            WaveformView.SetPlaybackPosition(Math.Clamp(normalizedPosition, 0, 1));
+
+            // Handle playback finished
+            if (state == PlaybackState.Stopped && _playbackService.State == PlaybackState.Stopped)
+            {
+                WaveformView.HidePlaybackPosition();
+                TransportControls.PlayButtonEnabled = true;
+                WaveformView.SaveButtonEnabled = true;
+                WaveformView.ClearButtonEnabled = true;
+                TransportControls.SetPlayButtonText(AppConstants.PlayButtonPlay);
+                _statusService.SetStatus(AppConstants.Messages.PlayingFinished);
+            }
+        });
+    }
+
+    private void WaveformView_PositionClicked(object? sender, double normalizedPosition)
+    {
+        _playbackService?.SeekToPosition(normalizedPosition);
+    }
+
+// ============================================================
+    // RECORDING MANAGEMENT
+    // ============================================================
+
+    private async void WaveformView_SaveClicked(object? sender, EventArgs e)
+    {
+        if (_recordingService == null || _playbackService?.State == PlaybackState.Playing)
+        {
+            return;
+        }
+
+        byte[] buffer;
         WaveFormat? format;
-        
+
         lock (_bufferGate)
         {
             if (_audioBuffers.Count == 0 || _captureFormat == null)
             {
                 return;
             }
-            
-            buffers = new List<byte[]>(_audioBuffers);
+
+            var totalLength = _audioBuffers.Sum(b => b.Length);
+            buffer = new byte[totalLength];
+            var offset = 0;
+            foreach (var buf in _audioBuffers)
+            {
+                Buffer.BlockCopy(buf, 0, buffer, offset, buf.Length);
+                offset += buf.Length;
+            }
+
             format = _captureFormat;
         }
-        
+
         try
         {
-            // Yhdistä bufferit yhdeksi byte-arrayiksi
-            var totalLength = buffers.Sum(b => b.Length);
-            var fullBuffer = new byte[totalLength];
-            var offset = 0;
-            foreach (var buffer in buffers)
-            {
-                Buffer.BlockCopy(buffer, 0, fullBuffer, offset, buffer.Length);
-                offset += buffer.Length;
-            }
-            
-            // Luo stream muistista
-            _playbackMemoryStream = new MemoryStream(fullBuffer);
-            _playbackRawStream = new RawSourceWaveStream(_playbackMemoryStream, format);
-            _totalDuration = TimeSpan.FromSeconds((double)fullBuffer.Length / format.AverageBytesPerSecond);
-            
-            // Luo toisto-objekti
-            _waveOut = new WaveOutEvent();
-            _waveOut.Init(_playbackRawStream);
-            _waveOut.PlaybackStopped += (s, args) =>
-            {
-                Dispatcher.Invoke(() =>
-                {
-                    _playbackStopwatch.Stop();
-                    _playbackStopwatch.Reset();
-                    _playbackSeekOffset = TimeSpan.Zero;
-                    _playbackTimer.Stop();
-                    WaveformView.HidePlaybackPosition();
-                    _playbackMemoryStream?.Dispose();
-                    _playbackMemoryStream = null;
-                    _playbackRawStream?.Dispose();
-                    _playbackRawStream = null;
-                    _waveOut?.Dispose();
-                    _waveOut = null;
-                    TransportControls.PlayButtonEnabled = true;
-                    TransportControls.SetPlayButtonText("▶ Play");
-                    WaveformView.SaveButtonEnabled = true;
-                    WaveformView.ClearButtonEnabled = true;
-                    CaptureStatusPanel.SetDetails("Playing finished");
-                });
-            };
-            
-            _waveOut.Play();
-            _playbackSeekOffset = TimeSpan.Zero;
-            _playbackStopwatch.Restart();
-            _playbackTimer.Start();
-            TransportControls.PlayButtonEnabled = true;
-            TransportControls.SetPlayButtonText("⏸ Pause");
             WaveformView.SaveButtonEnabled = false;
             WaveformView.ClearButtonEnabled = false;
-            CaptureStatusPanel.SetDetails("Playing...");
+            _statusService.SetStatus(AppConstants.Messages.Saving);
+
+            await _recordingService.SaveRecordingAsync(buffer, format);
+
+            // Clear buffers after save
+            lock (_bufferGate)
+            {
+                _audioBuffers.Clear();
+                _captureFormat = null;
+            }
+
+            _statusService.SetStatus(AppConstants.Messages.SavedAs + " " + AppConstants.FileNaming.GetRecordingFileName());
+            LoadRecordings();
         }
         catch (Exception ex)
         {
-            CaptureStatusPanel.SetDetails($"Error during playback: {ex.Message}");
-            _waveOut?.Dispose();
-            _waveOut = null;
+            _statusService.SetStatus($"{AppConstants.Messages.ErrorSaving} {ex.Message}");
+            UpdateSaveAndPlayButtons();
         }
     }
 
-    private void PlaybackTimer_Tick(object? sender, EventArgs e)
+    private void WaveformView_ClearClicked(object? sender, EventArgs e)
     {
-        if (_waveOut == null || _totalDuration.TotalSeconds == 0)
+        // Stop playback if running
+        if (_playbackService?.State == PlaybackState.Playing)
         {
-            return;
+            _playbackService.Stop();
+            WaveformView.HidePlaybackPosition();
+            TransportControls.SetPlayButtonText(AppConstants.PlayButtonPlay);
         }
 
-        // Käytä Stopwatch-aikaa + seek-offsettia Position:n sijaan sujuvampaan liikkeeseen
-        var elapsed = _playbackStopwatch.Elapsed + _playbackSeekOffset;
-        if (elapsed > _totalDuration)
+        // Clear audio buffers
+        lock (_bufferGate)
         {
-            elapsed = _totalDuration;
+            _audioBuffers.Clear();
+            _captureFormat = null;
         }
-        
-        var normalizedPosition = elapsed.TotalSeconds / _totalDuration.TotalSeconds;
-        WaveformView.SetPlaybackPosition(normalizedPosition);
+
+        // Clear waveform
+        _waveformService?.Clear();
+        WaveformView.Clear();
+
+        WaveformView.SaveButtonEnabled = false;
+        WaveformView.ClearButtonEnabled = false;
+        TransportControls.PlayButtonEnabled = false;
+        _statusService.SetStatus(AppConstants.Messages.RecordingCleared);
     }
 
-    private void WaveformView_PositionClicked(object? sender, double normalizedPosition)
-    {
-        if (_playbackRawStream == null || _totalDuration.TotalSeconds == 0)
-        {
-            return;
-        }
-
-        SeekToPosition(normalizedPosition);
-    }
-
-    private void SeekToPosition(double normalizedPosition)
-    {
-        if (_playbackRawStream == null || _captureFormat == null)
-        {
-            return;
-        }
-
-        // Laske uusi positio byteissä
-        var targetSeconds = normalizedPosition * _totalDuration.TotalSeconds;
-        var targetBytes = (long)(targetSeconds * _captureFormat.AverageBytesPerSecond);
-        
-        // Varmista että positio on block-aligned
-        var blockAlign = _captureFormat.BlockAlign;
-        targetBytes = (targetBytes / blockAlign) * blockAlign;
-        
-        // Aseta stream position
-        _playbackRawStream.Position = Math.Max(0, Math.Min(targetBytes, _playbackRawStream.Length));
-        
-        // Päivitä seek-offset ja nollaa Stopwatch
-        _playbackSeekOffset = TimeSpan.FromSeconds(targetSeconds);
-        _playbackStopwatch.Restart();
-        if (_waveOut?.PlaybackState != PlaybackState.Playing)
-        {
-            _playbackStopwatch.Stop();
-        }
-        
-        // Päivitä UI
-        WaveformView.SetPlaybackPosition(normalizedPosition);
-    }
-    
-    private void RecordingsPanel_RefreshClicked(object? sender, EventArgs e)
+    private async void RecordingsPanel_RefreshClicked(object? sender, EventArgs e)
     {
         LoadRecordings();
     }
 
-    private void RecordingsPanel_DeleteClicked(object? sender, EventArgs e)
+    private async void RecordingsPanel_DeleteClicked(object? sender, EventArgs e)
     {
-        DeleteSelectedRecordings();
+        await DeleteSelectedRecordings();
     }
 
-    private void RecordingsPanel_RenameClicked(object? sender, EventArgs e)
+    private async void RecordingsPanel_RenameClicked(object? sender, EventArgs e)
     {
-        RenameSelectedRecording();
+        await RenameSelectedRecording();
     }
-    
-    private void DeleteSelectedRecordings()
+
+    private void RecordingsPanel_RecordingKeyDown(object? sender, System.Windows.Input.KeyEventArgs e)
     {
-        var selectedItems = RecordingsPanel.SelectedRecordings.Cast<RecordingItem>().ToList();
-        
+        if (e.Key == System.Windows.Input.Key.Delete)
+        {
+            _ = DeleteSelectedRecordings();
+            e.Handled = true;
+        }
+    }
+
+    private async Task DeleteSelectedRecordings()
+    {
+        if (_recordingService == null)
+        {
+            return;
+        }
+
+        var selectedItems = RecordingsPanel.SelectedRecordings.Cast<RecordingItemViewModel>().ToList();
+
         if (selectedItems.Count == 0)
         {
-            MessageBox.Show("Select a recording to delete.", "Delete", MessageBoxButton.OK, MessageBoxImage.Information);
+            if (_dialogService != null)
+            {
+                await _dialogService.ShowInfoDialogAsync(
+                    AppConstants.Messages.ConfirmDelete,
+                    AppConstants.Messages.SelectToDelete);
+            }
             return;
         }
 
         var message = selectedItems.Count == 1
-            ? $"Are you sure you want to delete the recording '{selectedItems[0].Name}'?"
-            : $"Are you sure you want to delete {selectedItems.Count} recordings?";
-            
-        var result = MessageBox.Show(
-            message, 
-            "Confirm Delete", 
-            MessageBoxButton.YesNo, 
-            MessageBoxImage.Question);
+            ? string.Format(AppConstants.Messages.ConfirmDeleteSingle, selectedItems[0].Name)
+            : string.Format(AppConstants.Messages.ConfirmDeleteMultiple, selectedItems.Count);
 
-        if (result != MessageBoxResult.Yes)
+        var confirmed = false;
+        if (_dialogService != null)
+        {
+            confirmed = await _dialogService.ShowConfirmDialogAsync(
+                AppConstants.Messages.ConfirmDelete, message);
+        }
+
+        if (!confirmed)
         {
             return;
         }
 
-        var deletedCount = 0;
-        var errors = new List<string>();
-        
+        var deleteCount = 0;
+        var errors = new System.Collections.Generic.List<string>();
+
         foreach (var item in selectedItems)
         {
             try
             {
-                File.Delete(item.FullPath);
-                deletedCount++;
+                await _recordingService.DeleteRecordingAsync(item.FullPath);
+                deleteCount++;
             }
             catch (Exception ex)
             {
                 errors.Add($"{item.Name}: {ex.Message}");
             }
         }
-        
-        LoadRecordings();
-        
+
         if (errors.Count == 0)
         {
-            CaptureStatusPanel.SetDetails(deletedCount == 1
-                ? $"Deleted: {selectedItems[0].Name}"
-                : $"Deleted {deletedCount} recordings");
+            _statusService.SetStatus(deleteCount == 1
+                ? string.Format(AppConstants.Messages.DeletedRecording, selectedItems[0].Name)
+                : string.Format(AppConstants.Messages.DeletedMultiple, deleteCount));
         }
         else
         {
-            var errorMessage = string.Join("\n", errors);
-            MessageBox.Show($"Deleted {deletedCount} recordings.\n\nErrors:\n{errorMessage}", "Partial Delete Failed", MessageBoxButton.OK, MessageBoxImage.Warning);
-            CaptureStatusPanel.SetDetails($"Deleted {deletedCount}/{selectedItems.Count} recordings");
+            var errorMsg = string.Join("\n", errors);
+            if (_dialogService != null)
+            {
+                await _dialogService.ShowErrorDialogAsync(
+                    AppConstants.Messages.PartialDeleteFailed,
+                    $"Deleted {deleteCount} recordings.\n\nErrors:\n{errorMsg}");
+            }
+            _statusService.SetStatus($"Deleted {deleteCount}/{selectedItems.Count} recordings");
         }
+
+        LoadRecordings();
     }
 
-    private void RenameSelectedRecording()
+    private async Task RenameSelectedRecording()
     {
-        var selectedItem = RecordingsPanel.SelectedRecording as RecordingItem;
-        
+        if (_recordingService == null)
+        {
+            return;
+        }
+
+        var selectedItem = RecordingsPanel.SelectedRecording as RecordingItemViewModel;
+
         if (selectedItem == null)
         {
-            MessageBox.Show("Select a recording to rename.", "Rename", MessageBoxButton.OK, MessageBoxImage.Information);
+            if (_dialogService != null)
+            {
+                await _dialogService.ShowInfoDialogAsync(
+                    "Rename",
+                    AppConstants.Messages.SelectToRename);
+            }
             return;
         }
 
-        var dialog = new Window
+        var newName = string.Empty;
+        if (_dialogService != null)
         {
-            Title = "Rename Recording",
-            Width = 400,
-            Height = 150,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Owner = this,
-            ResizeMode = ResizeMode.NoResize
-        };
-
-        var stack = new System.Windows.Controls.StackPanel 
-        { 
-            Margin = new Thickness(20) 
-        };
-
-        var label = new System.Windows.Controls.TextBlock 
-        { 
-            Text = "New name:",
-            Margin = new Thickness(0, 0, 0, 8)
-        };
-
-        var textBox = new System.Windows.Controls.TextBox 
-        { 
-            Text = Path.GetFileNameWithoutExtension(selectedItem.Name),
-            Margin = new Thickness(0, 0, 0, 12)
-        };
-        textBox.SelectAll();
-
-        var buttonPanel = new System.Windows.Controls.StackPanel 
-        { 
-            Orientation = System.Windows.Controls.Orientation.Horizontal,
-            HorizontalAlignment = System.Windows.HorizontalAlignment.Right
-        };
-
-        var okButton = new System.Windows.Controls.Button 
-        { 
-            Content = "OK",
-            Width = 80,
-            Height = 32,
-            Margin = new Thickness(0, 0, 8, 0),
-            IsDefault = true
-        };
-        okButton.Click += (s, e) => { dialog.DialogResult = true; dialog.Close(); };
-
-        var cancelButton = new System.Windows.Controls.Button 
-        { 
-            Content = "Cancel",
-            Width = 80,
-            Height = 32,
-            IsCancel = true
-        };
-
-        buttonPanel.Children.Add(okButton);
-        buttonPanel.Children.Add(cancelButton);
-        
-        stack.Children.Add(label);
-        stack.Children.Add(textBox);
-        stack.Children.Add(buttonPanel);
-        
-        dialog.Content = stack;
-        dialog.Loaded += (s, e) => textBox.Focus();
-
-        if (dialog.ShowDialog() != true)
-        {
-            return;
+            newName = await _dialogService.ShowRenameDialogAsync(selectedItem.Name);
         }
 
-        var newName = textBox.Text.Trim();
         if (string.IsNullOrEmpty(newName))
         {
-            MessageBox.Show("Name cannot be empty.", "Rename", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        var extension = Path.GetExtension(selectedItem.Name);
-        var newFileName = newName + extension;
-        var newPath = Path.Combine(_recordingsFolder, newFileName);
-
-        if (File.Exists(newPath))
-        {
-            MessageBox.Show("A file with that name already exists.", "Rename", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
         try
         {
-            File.Move(selectedItem.FullPath, newPath);
+            await _recordingService.RenameRecordingAsync(selectedItem.FullPath, newName);
+            _statusService.SetStatus(string.Format(AppConstants.Messages.RenamedTo, newName));
             LoadRecordings();
-            CaptureStatusPanel.SetDetails($"Renamed to: {newFileName}");
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Failed to rename: {ex.Message}", "Rename Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            if (_dialogService != null)
+            {
+                await _dialogService.ShowErrorDialogAsync(
+                    AppConstants.Messages.RenameFailed,
+                    $"{AppConstants.Messages.ErrorRenaming} {ex.Message}");
+            }
         }
     }
 
-    private void RecordingsPanel_RecordingKeyDown(object? sender, KeyEventArgs e)
+    // ============================================================
+    // UI UPDATES
+    // ============================================================
+
+    private void LoadRecordings()
     {
-        if (e.Key == Key.Delete)
+        if (_recordingService == null)
         {
-            DeleteSelectedRecordings();
-            e.Handled = true;
+            return;
         }
-    }
 
+        _recordingItems.Clear();
+        var recordings = _recordingService.LoadRecordings();
+
+        foreach (var rec in recordings)
+        {
+            _recordingItems.Add(new RecordingItemViewModel(rec.Name, rec.DurationText, rec.FullPath));
+        }
+
+        RecordingsPanel.Recordings = _recordingItems;
+    }
 
     private void RedrawWaveform()
     {
-        // Piirrä jokaiselle huipulle pystyviiva.
-        WaveformAggregator? aggregator;
-        lock (_waveformGate)
-        {
-            aggregator = _waveform;
-        }
-
-        if (aggregator == null)
+        if (_waveformService?.PeakCount == 0)
         {
             WaveformView.WaveformPathElement.Data = null;
             return;
@@ -706,162 +576,24 @@ public partial class MainWindow : Window
 
         var width = WaveformView.Canvas.ActualWidth;
         var height = WaveformView.Canvas.ActualHeight;
-        if (width <= 1 || height <= 1)
-        {
-            return;
-        }
 
-        List<(float minL, float maxL, float minR, float maxR)> peaks;
-        lock (_waveformGate)
-        {
-            if (aggregator.Peaks.Count > MaxPeaks)
-            {
-                aggregator.Peaks.RemoveRange(0, aggregator.Peaks.Count - MaxPeaks);
-            }
-
-            peaks = aggregator.Peaks.ToList();
-        }
-
-        if (peaks.Count == 0)
-        {
-            WaveformView.WaveformPathElement.Data = null;
-            return;
-        }
-
-        var geometry = new StreamGeometry();
-        using (var context = geometry.Open())
-        {
-            var mid = height / 2.0;
-            var step = peaks.Count > 1 ? width / (peaks.Count - 1) : width;
-
-            for (var i = 0; i < peaks.Count; i++)
-            {
-                var peak = peaks[i];
-                var min = Math.Min(peak.minL, peak.minR);
-                var max = Math.Max(peak.maxL, peak.maxR);
-
-                min = Math.Clamp(min, -1f, 1f);
-                max = Math.Clamp(max, -1f, 1f);
-
-                var x = i * step;
-                var y1 = mid - (max * mid);
-                var y2 = mid - (min * mid);
-
-                context.BeginFigure(new Point(x, y1), false, false);
-                context.LineTo(new Point(x, y2), true, false);
-            }
-        }
-
-        geometry.Freeze();
+        var geometry = _waveformService?.GetGeometry(width, height);
         WaveformView.WaveformPathElement.Data = geometry;
     }
 
-    private async void OnClosed(object? sender, EventArgs e)
+    private void UpdateSaveAndPlayButtons()
     {
-        _waveOut?.Stop();
-        _waveOut?.Dispose();
-        await _captureService.StopAsync().ConfigureAwait(true);
-        await _captureService.DisposeAsync().ConfigureAwait(true);
-    }
-
-    private void LoadRecordings()
-    {
-        EnsureRecordingsFolder();
-        _recordings.Clear();
-
-        var files = Directory.EnumerateFiles(_recordingsFolder, "*.wav")
-            .OrderByDescending(File.GetCreationTimeUtc);
-
-        foreach (var file in files)
+        bool hasAudioData;
+        lock (_bufferGate)
         {
-            if (!TryGetDuration(file, out var duration))
-            {
-                continue;
-            }
-
-            _recordings.Add(new RecordingItem
-            {
-                Name = Path.GetFileName(file),
-                DurationText = FormatDuration(duration),
-                FullPath = file
-            });
+            hasAudioData = _audioBuffers.Count > 0 && _captureFormat != null;
         }
-    }
 
-    private void EnsureRecordingsFolder()
-    {
-        if (!Directory.Exists(_recordingsFolder))
-        {
-            Directory.CreateDirectory(_recordingsFolder);
-        }
-    }
+        bool isPlaying = _playbackService?.State == PlaybackState.Playing;
+        bool isStopped = _lastStatus.State == CaptureState.Stopped;
 
-    private static bool TryGetDuration(string filePath, out TimeSpan duration)
-    {
-        try
-        {
-            using var reader = new AudioFileReader(filePath);
-            duration = reader.TotalTime;
-            return true;
-        }
-        catch
-        {
-            duration = TimeSpan.Zero;
-            return false;
-        }
-    }
-
-    private static string FormatDuration(TimeSpan duration)
-    {
-        return duration.TotalHours >= 1
-            ? duration.ToString(@"hh\:mm\:ss")
-            : duration.ToString(@"mm\:ss");
-    }
-
-    private string BuildRecordingPath()
-    {
-        EnsureRecordingsFolder();
-        var fileName = $"ezsampler_{DateTime.Now:yyyyMMdd_HHmmss}.wav";
-
-        var fullPath = Path.Combine(_recordingsFolder, fileName);
-        return EnsureUniquePath(fullPath);
-    }
-
-    private static string SanitizeFileName(string? input)
-    {
-        if (string.IsNullOrWhiteSpace(input))
-        {return string.Empty;}
-
-        var invalid = Path.GetInvalidFileNameChars();
-        var cleaned = new string(input.Trim().Where(ch => !invalid.Contains(ch)).ToArray());
-        return cleaned;
-    }
-
-    private static string EnsureUniquePath(string path)
-    {
-        if (!File.Exists(path))
-        {return path;}
-
-        var directory = Path.GetDirectoryName(path) ?? string.Empty;
-        var name = Path.GetFileNameWithoutExtension(path);
-        var extension = Path.GetExtension(path);
-
-        var index = 1;
-        string candidate;
-        do
-        {
-            candidate = Path.Combine(directory, $"{name}_{index}{extension}");
-            index++;
-        }
-        while (File.Exists(candidate));
-
-        return candidate;
-    }
-
-    private sealed class RecordingItem
-    {
-        public string Name { get; init; } = string.Empty;
-        public string DurationText { get; init; } = "--:--";
-        public string FullPath { get; init; } = string.Empty;
+        WaveformView.SaveButtonEnabled = isStopped && hasAudioData && !isPlaying;
+        WaveformView.ClearButtonEnabled = isStopped && hasAudioData && !isPlaying;
+        TransportControls.PlayButtonEnabled = isStopped && hasAudioData;
     }
 }

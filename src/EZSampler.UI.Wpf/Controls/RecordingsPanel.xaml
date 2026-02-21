@@ -7,7 +7,7 @@
              mc:Ignorable="d">
 
     <StackPanel>
-        <TextBlock Text="Recordings" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,8" />
+        <TextBlock Text="RECORDINGS" FontSize="30" FontWeight="Bold" Foreground="#2E2E2E" Margin="0,0,0,8" FontFamily="./Fonts/#Poppins" />
         <TextBlock x:Name="RecordingsFolderText" 
                    Margin="0,0,0,12" 
                    FontSize="11"

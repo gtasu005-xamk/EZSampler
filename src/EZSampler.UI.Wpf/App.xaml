@@ -9,15 +9,10 @@
             <ResourceDictionary.MergedDictionaries>
                 <ui:ThemeResources RequestedTheme="Light" />
                 <ui:XamlControlsResources />
+                <!-- Design System - Centralized styling and design tokens -->
+                <ResourceDictionary Source="Themes/DesignTokens.xaml" />
+                <ResourceDictionary Source="Themes/ComponentStyles.xaml" />
             </ResourceDictionary.MergedDictionaries>
-            
-            <!-- Wise-inspired beige + lime green palette -->
-            <SolidColorBrush x:Key="AppBackgroundBrush" Color="#E8E7E5"/>
-            <SolidColorBrush x:Key="CardBackgroundBrush" Color="#F9F8F6"/>
-            <SolidColorBrush x:Key="CardBorderBrush" Color="#D5D4D2"/>
-            <SolidColorBrush x:Key="SubtleBackgroundBrush" Color="#F5F5F3"/>
-            <SolidColorBrush x:Key="AccentGreenBrush" Color="#9FE870"/>
-            <SolidColorBrush x:Key="DarkTextBrush" Color="#2E2E2E"/>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

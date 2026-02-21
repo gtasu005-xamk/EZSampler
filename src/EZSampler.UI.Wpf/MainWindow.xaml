@@ -9,28 +9,9 @@
         mc:Ignorable="d"
         ui:WindowHelper.UseModernWindowStyle="True"
         Background="{StaticResource AppBackgroundBrush}"
-
-         
         MinWidth="820" MinHeight="420"  
         Width="1000" Height="600"
         WindowStartupLocation="CenterScreen">
-
-        <Window.Resources>
-        <Style x:Key="Card" TargetType="Border">
-            <Setter Property="CornerRadius" Value="8"/>
-            <Setter Property="Padding" Value="16"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="BorderBrush" Value="{StaticResource CardBorderBrush}"/>
-            <Setter Property="Background" Value="{StaticResource CardBackgroundBrush}"/>
-            <Setter Property="SnapsToDevicePixels" Value="True"/>
-            <Setter Property="Effect">
-                <Setter.Value>
-                    <DropShadowEffect Color="#40000000" BlurRadius="8" ShadowDepth="2" Opacity="0.15"/>
-                </Setter.Value>
-            </Setter>
-        </Style>
-    </Window.Resources>
-
 
     <Grid Margin="16">
         <Grid.ColumnDefinitions>
@@ -39,7 +20,7 @@
             <ColumnDefinition Width="320" />
         </Grid.ColumnDefinitions>
 
-        <Border Grid.Column="0" Style="{StaticResource Card}">
+        <Border Grid.Column="0" Style="{StaticResource CardBorder}">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -48,11 +29,9 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 
-                <TextBlock Text="EZSAMPLER" 
-                           FontFamily="./Fonts/#Poppins"
-                           FontSize="36" 
-                            
-                           Foreground="#2E2E2E"
+                <TextBlock Grid.Row="0"
+                           Text="EZSAMPLER" 
+                           Style="{StaticResource TextBlockHeading1}"
                            Margin="0,0,0,16" />
 
                 <controls:WaveformView Grid.Row="1" Margin="0,0,0,16" x:Name="WaveformView" />
@@ -63,7 +42,7 @@
             </Grid>
         </Border>
 
-        <Border Grid.Column="2" Style="{StaticResource Card}">
+        <Border Grid.Column="2" Style="{StaticResource CardBorder}">
             <controls:RecordingsPanel x:Name="RecordingsPanel" />
         </Border>
     </Grid>
