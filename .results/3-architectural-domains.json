@@ -1,0 +1,36 @@
+{
+  "audio-capture": {
+    "required_patterns": {
+      "capture-service": "Use `CaptureService` as the entry point with `StartAsync`/`StopAsync` and event subscriptions for status and faults.",
+      "naudio-loopback": "Capture uses `WasapiLoopbackCapture` and writes to `WaveFileWriter` using the capture `WaveFormat`."
+    },
+    "architectural_constraints": {
+      "output-path": "Capture writes a timestamped WAV file to the user's Desktop.",
+      "status-events": "State transitions and errors are surfaced via `StatusChanged` and `Faulted` events."
+    }
+  },
+  "audio-processing": {
+    "required_patterns": {
+      "waveform-peaks": "Waveform peak aggregation is performed in `WaveformAggregator.Process` using `WaveFormat` metadata."
+    },
+    "architectural_constraints": {
+      "format-driven": "Buffer parsing derives block size from `BitsPerSample` and `Channels`, and uses `BitConverter.ToSingle`."
+    }
+  },
+  "console-host": {
+    "required_patterns": {
+      "interactive-host": "Console host prompts the user and controls capture lifecycle with blocking `ReadLine()` calls."
+    },
+    "architectural_constraints": {
+      "core-dependency": "Console app depends on `EZSampler.Core` and uses `CaptureService` directly."
+    }
+  },
+  "ui-wpf": {
+    "required_patterns": {
+      "wpf-codebehind": "UI uses XAML windows with code-behind; no MVVM or DI patterns are present."
+    },
+    "architectural_constraints": {
+      "startup-window": "App startup uses `StartupUri=MainWindow.xaml` without custom startup logic."
+    }
+  }
+}

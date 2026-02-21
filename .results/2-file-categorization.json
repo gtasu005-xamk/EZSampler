@@ -1,0 +1,23 @@
+{
+  "solution": ["./EZSampler.sln"],
+  "repo-docs": ["./README.md"],
+  "editorconfig": ["./.editorconfig"],
+  "project-files": [
+    "./src/EZSampler.Console/EZSampler.Console.csproj",
+    "./src/EZSampler.core/EZSampler.Core.csproj",
+    "./src/EZSampler.UI.Wpf/EZSampler.UI.Wpf.csproj"
+  ],
+  "console-host": ["./src/EZSampler.Console/Program.cs"],
+  "audio-capture": ["./src/EZSampler.core/CaptureService.cs"],
+  "audio-processing": ["./src/EZSampler.core/waveformAggregator.cs"],
+  "core-placeholder": ["./src/EZSampler.core/Class1.cs"],
+  "wpf-xaml": [
+    "./src/EZSampler.UI.Wpf/App.xaml",
+    "./src/EZSampler.UI.Wpf/MainWindow.xaml"
+  ],
+  "wpf-codebehind": [
+    "./src/EZSampler.UI.Wpf/App.xaml.cs",
+    "./src/EZSampler.UI.Wpf/MainWindow.xaml.cs"
+  ],
+  "assemblyinfo": ["./src/EZSampler.UI.Wpf/AssemblyInfo.cs"]
+}

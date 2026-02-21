@@ -1,0 +1,52 @@
+<UserControl x:Class="EZSampler.UI.Wpf.Controls.RecordingsPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:ui="http://schemas.modernwpf.com/2019"
+             mc:Ignorable="d">
+
+    <StackPanel>
+        <TextBlock Text="Recordings" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,8" />
+        <TextBlock x:Name="RecordingsFolderText" 
+                   Margin="0,0,0,12" 
+                   FontSize="11"
+                   Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                   TextWrapping="Wrap" />
+        <ListView x:Name="RecordingsList" 
+                  Height="320" 
+                  SelectionMode="Extended"
+                  KeyDown="RecordingsList_KeyDown"
+                  PreviewMouseLeftButtonDown="RecordingsList_PreviewMouseLeftButtonDown"
+                  MouseMove="RecordingsList_MouseMove">
+            <ListView.View>
+                <GridView>
+                    <GridViewColumn Header="Name" DisplayMemberBinding="{Binding Name}" Width="190" />
+                    <GridViewColumn Header="Duration" DisplayMemberBinding="{Binding DurationText}" Width="70" />
+                </GridView>
+            </ListView.View>
+        </ListView>
+        <StackPanel Orientation="Horizontal" Margin="0,12,0,0" HorizontalAlignment="Center">
+            <Button x:Name="RefreshRecordingsButton" 
+                    Width="90" 
+                    Height="36" 
+                    Margin="0,0,8,0" 
+                    Click="RefreshRecordingsButton_Click">
+                🔄 Refresh
+            </Button>
+            <Button x:Name="RenameRecordingButton" 
+                    Width="90" 
+                    Height="36" 
+                    Margin="0,0,8,0"
+                    Click="RenameRecordingButton_Click">
+                ✏️ Rename
+            </Button>
+            <Button x:Name="DeleteRecordingButton" 
+                    Width="90" 
+                    Height="36" 
+                    Click="DeleteRecordingButton_Click">
+                🗑 Delete
+            </Button>
+        </StackPanel>
+    </StackPanel>
+</UserControl>
