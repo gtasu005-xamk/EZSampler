@@ -59,7 +59,7 @@ public static class AppConstants
         public const string PlayingFinished = "Playing finished";
         public const string PlaybackPaused = "Playback paused";
         public const string Playing = "Playing...";
-        public const string Saving = "Tallennetaan...";
+        public const string Saving = "Saving...";
         
         // Confirmation dialogs
         public const string ConfirmDeleteSingle = "Are you sure you want to delete '{0}'?";
@@ -73,16 +73,16 @@ public static class AppConstants
         public const string FileAlreadyExists = "A file with that name already exists.";
         
         // Error messages
-        public const string SavingFailed = "Tallennus epäonnistui";
+        public const string SavingFailed = "Saving Failed";
         public const string RenameFailed = "Rename Error";
-        public const string ErrorSaving = "Virhe tallennuksessa: {0}";
+        public const string ErrorSaving = "Error saving: {0}";
         public const string ErrorRenaming = "Failed to rename: {0}";
         public const string ErrorPlayback = "Error during playback: {0}";
         
         // Success messages
         public const string PartialDeleteFailed = "Partial Delete Failed";
         public const string RenamedTo = "Renamed to: {0}";
-        public const string SavedAs = "Tallennettu: {0}";
+        public const string SavedAs = "Saved as: {0}";
         public const string DeletedRecording = "Deleted: {0}";
         public const string DeletedMultiple = "Deleted {0} recordings";
     }

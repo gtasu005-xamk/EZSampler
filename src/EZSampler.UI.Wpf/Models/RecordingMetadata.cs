@@ -4,9 +4,9 @@ using EZSampler.UI.Wpf.Extensions;
 
 namespace EZSampler.UI.Wpf.Models;
 
-/// <summary>
+
 /// Represents metadata for a recorded audio file.
-/// </summary>
+
 public sealed class RecordingMetadata
 {
     /// <summary>

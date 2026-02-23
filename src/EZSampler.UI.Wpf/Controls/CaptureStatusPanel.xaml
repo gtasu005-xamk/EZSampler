@@ -7,20 +7,22 @@
              mc:Ignorable="d">
 
     <StackPanel>
-        <TextBlock Text="Status" 
-                   FontSize="13" 
-                   FontWeight="SemiBold" 
-                   Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}" 
-                   Margin="0,0,0,6" />
-        <TextBlock x:Name="StatusText" 
-                   Text="Stopped" 
-                   FontSize="14" 
-                   FontWeight="SemiBold" 
-                   Margin="0,0,0,4" />
-        <TextBlock x:Name="DetailsText" 
-                   Text="" 
+        <TextBlock Text="Status"
+                   FontSize="13"
+                   FontWeight="SemiBold"
+                   Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                   Margin="0,0,0,6"/>
+
+        <TextBlock x:Name="StatusText"
+                   Text="Stopped"
+                   FontSize="14"
+                   FontWeight="SemiBold"
+                   Margin="0,0,0,4"/>
+                   
+        <TextBlock x:Name="DetailsText"
+                   Text=""
                    FontSize="12"
                    Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
-                   TextWrapping="Wrap" />
+                   TextWrapping="Wrap"/>
     </StackPanel>
 </UserControl>
