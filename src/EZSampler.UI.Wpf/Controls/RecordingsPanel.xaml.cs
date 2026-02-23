@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using EZSampler.UI.Wpf.Models;
 
 namespace EZSampler.UI.Wpf.Controls;
 
@@ -72,8 +73,17 @@ public partial class RecordingsPanel : UserControl
             var selectedItems = RecordingsList.SelectedItems.Cast<object>().ToList();
             if (selectedItems.Count > 0)
             {
-                var data = new DataObject(DataFormats.FileDrop, selectedItems.ToArray());
-                DragDrop.DoDragDrop(RecordingsList, data, DragDropEffects.Copy);
+                // Extract file paths from RecordingItemViewModel objects
+                var filePaths = selectedItems
+                    .OfType<RecordingItemViewModel>()
+                    .Select(item => item.FullPath)
+                    .ToArray();
+                
+                if (filePaths.Length > 0)
+                {
+                    var data = new DataObject(DataFormats.FileDrop, filePaths);
+                    DragDrop.DoDragDrop(RecordingsList, data, DragDropEffects.Copy);
+                }
             }
         }
     }
